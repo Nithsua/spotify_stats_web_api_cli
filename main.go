@@ -2,12 +2,16 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"net/http"
 	"os"
+
+	"github.com/joho/godotenv"
+	"golang.org/x/oauth2"
 )
 
 func getAppAuthAccessToken() (map[string]string, error) {
@@ -45,6 +49,83 @@ func getAppAuthAccessToken() (map[string]string, error) {
 	return parsedBody, nil
 }
 
-func main() {
+//UserAuth ...
+type UserAuth struct {
+	conf  oauth2.Config
+	code  string
+	token oauth2.Token
+}
 
+func (userAuth *UserAuth) init() error {
+	userAuth.conf = oauth2.Config{
+		ClientID:     os.Getenv("CLIENT_ID"),
+		ClientSecret: os.Getenv("CLIENT_SECRET"),
+		Scopes:       []string{"user-read-recently-played", "user-read-playback-state", "user-top-read"},
+		Endpoint: oauth2.Endpoint{
+			AuthURL:  "https://accounts.spotify.com/authorize",
+			TokenURL: "https://accounts.spotify.com/api/token",
+		},
+		RedirectURL: "http://localhost:8000",
+	}
+
+	url := userAuth.conf.AuthCodeURL("")
+	fmt.Printf("Visit the URL for the auth dialog: %v\n\n", url)
+
+	fmt.Println("Enter the code:")
+	if _, err := fmt.Scan(&userAuth.code); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (userAuth *UserAuth) getUserAuthAccessToken(ctx *context.Context) error {
+	tok, err := userAuth.conf.Exchange(*ctx, userAuth.code)
+	if err != nil {
+		return err
+	}
+
+	userAuth.token = *tok
+	return nil
+}
+
+func getData(url string, accessToken string) (map[string]string, error) {
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		panic(err.Error())
+	}
+
+	req.Header = map[string][]string{
+		"Authorization": {"Bearer " + accessToken},
+	}
+	client := http.Client{}
+
+	response, err := client.Do(req)
+	if err != nil {
+		panic(err.Error())
+	}
+
+	respBody, err := ioutil.ReadAll(response.Body)
+	if err != nil {
+		panic(err.Error())
+	}
+
+	fmt.Println(string(respBody))
+	respMap := make(map[string]string)
+	json.Unmarshal(respBody, &respMap)
+
+	return respMap, nil
+}
+
+func main() {
+	err := godotenv.Load()
+	if err != nil {
+		panic(err.Error())
+	}
+	userAuth := UserAuth{}
+	userAuth.init()
+
+	ctx := context.Background()
+	userAuth.getUserAuthAccessToken(&ctx)
+
+	fmt.Println("\n" + userAuth.token.AccessToken)
 }
