@@ -2,12 +2,11 @@ package main
 
 import (
 	"bytes"
-	// "context"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
-	"net"
 	"net/http"
 	"os"
 
@@ -63,7 +62,7 @@ func getAuthCode(w *http.ResponseWriter, r http.Request) string {
 	return string(data)
 }
 
-func (userAuth *UserAuth) init() (chan string, error) {
+func (userAuth *UserAuth) init() (string, error) {
 	userAuth.conf = oauth2.Config{
 		ClientID:     os.Getenv("CLIENT_ID"),
 		ClientSecret: os.Getenv("CLIENT_SECRET"),
@@ -72,36 +71,41 @@ func (userAuth *UserAuth) init() (chan string, error) {
 			AuthURL:  "https://accounts.spotify.com/authorize",
 			TokenURL: "https://accounts.spotify.com/api/token",
 		},
-		RedirectURL: "http://localhost:8091",
+		RedirectURL: "http://localhost:8080/oauth/redirect",
 	}
 
 	url := userAuth.conf.AuthCodeURL("")
 	fmt.Printf("Visit the URL for the auth dialog: %v\n\n", url)
 
-	codeValue := make(chan string)
-	listener, err := net.Listen("tcp", "http://139.59.9.244:8091")
-	if err == nil {
-		fmt.Println("Serving on :8091")
-		go http.Serve(listener, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			fmt.Println("Received Response")
-			codeValue <- r.FormValue("code")
-			w.Header().Set("content-type", "text/plain")
-			fmt.Fprintln(w, "You can close the browser window now")
-		}))
-	}
+	codeValue := ""
+	server := &http.Server{Addr: ":8080", Handler: nil}
+	http.HandleFunc("/oauth/redirect", func(w http.ResponseWriter, r *http.Request) {
+		err := r.ParseForm()
+		if err != nil {
+			fmt.Println(err)
+		}
+		codeValue = r.FormValue("code")
+		w.Header().Set("content-type", "text/plain")
+		fmt.Fprintln(w, "You can close the browser window now")
+		if err = server.Shutdown(context.Background()); err != nil {
+			fmt.Printf("Error: %s", err)
+		}
+	})
+	err := server.ListenAndServe()
+	userAuth.code = codeValue
 
 	return codeValue, err
 }
 
-// func (userAuth *UserAuth) getUserAuthAccessToken(ctx *context.Context) error {
-// 	tok, err := userAuth.conf.Exchange(*ctx, userAuth.code)
-// 	if err != nil {
-// 		return err
-// 	}
+func (userAuth *UserAuth) getUserAuthAccessToken(ctx *context.Context) error {
+	tok, err := userAuth.conf.Exchange(*ctx, userAuth.code)
+	if err != nil {
+		return err
+	}
 
-// 	userAuth.token = *tok
-// 	return nil
-// }
+	userAuth.token = *tok
+	return err
+}
 
 func getData(url string, accessToken string) (map[string]string, error) {
 	req, err := http.NewRequest("GET", url, nil)
@@ -138,14 +142,18 @@ func main() {
 	}
 
 	userAuth := UserAuth{}
-	code, err := userAuth.init()
-	if err == nil {
-		authCode := <-code
-		fmt.Println(authCode)
+	_, err = userAuth.init()
+	if err != nil {
+		fmt.Printf("Error: %s\n", err)
 	}
 
-	// ctx := context.Background()
-	// userAuth.getUserAuthAccessToken(&ctx)
+	ctx := context.Background()
+	userAuth.getUserAuthAccessToken(&ctx)
 
-	// fmt.Println("\n" + userAuth.token.AccessToken)
+	fmt.Println("token: " + userAuth.token.AccessToken)
+	userData, err := getData("https://api.spotify.com/v1/me", userAuth.token.AccessToken)
+	if err != nil {
+		fmt.Printf("Error: %s\n", err)
+	}
+	fmt.Println(userData)
 }
